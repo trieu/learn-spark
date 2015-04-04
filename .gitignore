@@ -1,6 +1,10 @@
 *.class
 *.log
 
+**/bin/*
+**/.gradle/*
+**/.settings/*
+
 # sbt specific
 .cache
 .history
