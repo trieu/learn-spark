@@ -3,7 +3,7 @@ apply plugin: 'scala'
 apply plugin: 'java'
 apply plugin: 'eclipse'
 
-sourceCompatibility = 1.7
+sourceCompatibility = 1.8
 
 version = '1.0'
 
@@ -22,8 +22,36 @@ dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.11'
 }
 
-// Gradle Wrapper Settings
-task wrapper(type: Wrapper) {
-    gradleVersion = "2.2"
+def getClasspathStringJars() {
+	def baseFolder = 'deps/'
+    def fileNames = []
+    configurations.compile.each { File file -> fileNames.add(baseFolder + file.name) }
+    
+    def classpath = fileNames.join(" ; ")    
+    return '. ; ' + classpath + ' ; '
 }
 
+task printClasspathStringJars << {   
+    println getClasspathStringJars()
+}
+
+task copyRuntimeLibs(type: Copy) {  
+  into "build/libs/deps"  
+  from configurations.compile  
+}
+
+task jarSparkWorker(type: Jar) {	
+	dependsOn classes   
+	from(sourceSets.main.output) {
+        include "**"
+    }
+    version = '1.0'
+    baseName = 'spark-worker'
+    manifest {
+   		attributes ('Implementation-Title': 'VisitorViewableEventJob', 
+        			'Implementation-Version': version ,
+        			'Main-Class': 'dw.job.click.VisitorViewableEventJob',
+        			'Class-Path' : getClasspathStringJars() 
+        			)
+	}
+}

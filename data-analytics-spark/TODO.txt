@@ -1,0 +1,6 @@
+http://mbonaci.github.io/mbo-spark/
+https://trongkhoanguyenblog.wordpress.com/2014/11/15/how-to-install-spark-1-1-on-ubuntu/
+
+http://techs.studyhorror.com/sbt-scala-eclipse-project-i-180
+http://stackoverflow.com/questions/15381294/how-to-initialize-a-new-scala-project-in-sbt-eclipse-and-github
+http://discuss.gradle.org/t/how-to-create-a-simple-scala-standalone-jar/6846/5
