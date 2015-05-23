@@ -21,7 +21,8 @@ object VisitorViewableEventJob {
     var platform: String = _platform
     var ip: String = _ip
 
-    override def toString = "%s %s %s %s %s".format(timeStr, uuid, url, platform, ip)
+    //override def toString = "%s %s %s %s %s".format(timeStr, uuid, url, platform, ip)
+    override def toString = "IP: %s".format(ip)
 
   }
 
@@ -31,6 +32,7 @@ object VisitorViewableEventJob {
     .setAppName("ClickCounting")
     .set("spark.executor.memory", "1g")
   val sc = new SparkContext(conf)
+  val counter = new AtomicInteger()
 
   def processLogFile(logFile: String) {
     val logData = sc.textFile(logFile, 2).cache()
@@ -41,7 +43,6 @@ object VisitorViewableEventJob {
         if (toks.length == 21) {
           if (!toks(2).contains("=")) {
             val e = new VisitorViewableEvent(toks(1), toks(2), toks(4), toks(17), toks(19))
-            // 
             events += e
           }
         }
@@ -50,9 +51,9 @@ object VisitorViewableEventJob {
 
     // done
     println("done: " + events.size)
-    val i = new AtomicInteger()
+    
     def processEvent(e: VisitorViewableEvent) {
-      println(i.incrementAndGet() + ":" + e)
+      println(counter.incrementAndGet() + ":" + e)
     }
     events.foreach(processEvent)
 
@@ -66,12 +67,12 @@ object VisitorViewableEventJob {
   }
 
   def main(args: Array[String]) {
-    val logFile = "/home/trieunt/data/demo_targeting_data/log_trueimp/day=2014-10-26/hour=09/raw-log-2014-10-26-09-3-0.log" //args(0)
-    val files = LogUtil.recursiveListFiles(new File("/home/trieunt/data/demo_targeting_data/log_trueimp/day=2014-10-26/hour=09/"))
+    var path = "/home/trieu/data/raw_logs/true_imp/day=2014-10-26/hour=11"
+    val files = LogUtil.recursiveListFiles(new File(path))
     def handler(f: File) {
       println(f.getAbsolutePath)
       processLogFile(f.getAbsolutePath)
-      Thread.sleep(2000)
+      Thread.sleep(500)
     }
     files.foreach { handler }
 
