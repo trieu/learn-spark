@@ -10,7 +10,6 @@ object PushPaperIntoVacuumCleaner {
   }
 
   def toElement(c: Char, i: Int): DataEvent = {
-    //println(c + " " + i);
     return new DataEvent(c,i)
   }
   
@@ -25,19 +24,21 @@ object PushPaperIntoVacuumCleaner {
     val paper = "*****HELLO******"
     
     //transform into a set of elements
-    val paperSet = paper.toCharArray()
+    val paperSet = paper.toCharArray()    
     val elements = Array.tabulate(paper.length) { i => toElement(paperSet(i), i) }
     
     //treat data as stream
     val stream = pushIntoVacuumCleaner(elements)    
     println( stream.foldLeft("")((x,y) => x + "\n" + y  ) )
     
+    println("RAW message: " + paper )
+    
     //print it out as unordered list 
-    println( stream.map { x:DataEvent => x.getData  } )
+    println("After take out from VacuumCleaner: " + stream.map { x:DataEvent => x.getData  } )
     
     //sorting the list and print it out as ordered list
     val newStream = stream.sortWith(_._i < _._i)
-    println( newStream.map { x:DataEvent => x.getData  } )
+    println("Sorted data event: " + newStream.map { x:DataEvent => x.getData  } )
   }
 
 }
