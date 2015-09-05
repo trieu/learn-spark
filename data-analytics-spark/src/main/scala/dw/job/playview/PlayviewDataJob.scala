@@ -72,7 +72,7 @@ object PlayviewDataJob {
 //      }
 //    })
 
-    // Create a DataFrame of Customer objects from the dataset text file.
+    // Create a DataFrame of Playview objects from the dataset text file.
     val dfPlayviews = sc.textFile(file).cache().map(_.split("\t")).map(p =>
       Playview(
           p(0).trim.toInt, 
