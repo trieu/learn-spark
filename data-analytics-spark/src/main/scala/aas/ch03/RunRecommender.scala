@@ -10,18 +10,18 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.recommendation._
 import org.apache.spark.rdd.RDD
 
-object RunRecommender {
+object NhacsoRecommender {
 
   def main(args: Array[String]): Unit = {
 
     val conf = new SparkConf()
       .setMaster("local")
-      .setAppName("Recommender")
+      .setAppName("Nhacso_Recommender")
       .set("spark.executor.memory", "2g")
     val sc = new SparkContext(conf)
 
     val base = "file:///home/trieu/data/aas/ch03/profiledata_06-May-2005/"
-    val rawUserArtistData = sc.textFile(base + "user_artist_data.txt")
+    val rawUserArtistData = sc.textFile(base + "user_artist_data_small.txt")
     val rawArtistData = sc.textFile(base + "artist_data.txt")
     val rawArtistAlias = sc.textFile(base + "artist_alias.txt")
 
@@ -101,7 +101,7 @@ object RunRecommender {
 
     println(model.userFeatures.mapValues(_.mkString(", ")).first())
 
-    val userID = 2093760
+    val userID = 1036996
     val recommendations = model.recommendProducts(userID, 5)
     recommendations.foreach(println)
     val recommendedProductIDs = recommendations.map(_.product).toSet

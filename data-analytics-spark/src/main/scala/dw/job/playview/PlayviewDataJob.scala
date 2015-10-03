@@ -94,9 +94,9 @@ object PlayviewDataJob {
     //dfPlayviews.show()
 
     // SQL statements can be run by using the sql methods provided by sqlContext.
-    val results = sqlContext.sql("SELECT url FROM playviews WHERE locCity = 'Ho Chi Minh City' AND platformId = 2")
+    val results = sqlContext.sql("SELECT DISTINCT url FROM playviews WHERE locCity = 'Ho Chi Minh City' AND platformId = 3")
     //playviewsByCity.show()
-   results.map(t => "url: " + t(0)).collect().foreach(println)
+   results.map(t => "url: " + String.valueOf(t(0)).split("#").apply(0) ).collect().foreach(println)
 
     //sc.stop()
   }
