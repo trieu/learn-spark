@@ -7,8 +7,8 @@ object ActorPoolStarter {
   def main(args: Array[String]) {
     val system = ActorSystem("mySystem")
     val myActor = system.actorOf(Props[ContextActor], "myactor2")
-    myActor ! "mm"
-    system.shutdown()
+    myActor ! "test"
+    system.terminate()
     
   }
 }
