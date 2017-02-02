@@ -12,8 +12,14 @@ repositories {
 }
 
 dependencies {
-	//Akka Actor Core
+	// Akka Actor Core
 	compile group: 'com.typesafe.akka', name: 'akka-actor_2.11', version: '2.4.16'
+	
+	// Akka HTTP
+	compile group: 'com.typesafe.akka', name: 'akka-http-core_2.11', version: '10.0.3'
+	compile group: 'com.typesafe.akka', name: 'akka-http_2.11', version: '10.0.3'
+	compile group: 'com.typesafe.akka', name: 'akka-http-spray-json_2.11', version: '10.0.3'
+	
 	
 	// Apache Spark
     compile (	
