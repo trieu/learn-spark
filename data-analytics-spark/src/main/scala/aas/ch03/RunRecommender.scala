@@ -3,36 +3,182 @@ package aas.ch03
 import scala.collection.Map
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
-
-import org.apache.spark.{ SparkConf, SparkContext }
-import org.apache.spark.SparkContext._
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.mllib.recommendation._
-import org.apache.spark.rdd.RDD
+import org.apache.spark.ml.recommendation.{ ALS, ALSModel }
+import org.apache.spark.sql.{ DataFrame, Dataset, SparkSession }
+import org.apache.spark.sql.functions._
+import org.apache.spark.SparkConf
 
-object NhacsoRecommender {
+object RunRecommender {
 
   def main(args: Array[String]): Unit = {
 
     val conf = new SparkConf()
       .setMaster("local")
       .setAppName("Nhacso_Recommender")
-      .set("spark.executor.memory", "2g")
-    val sc = new SparkContext(conf)
+      .set("spark.executor.memory", "3g")
+    val spark = SparkSession.builder().config(conf).getOrCreate()
 
-    val base = "file:///home/trieu/data/aas/ch03/profiledata_06-May-2005/"
-    val rawUserArtistData = sc.textFile(base + "user_artist_data_small.txt")
-    val rawArtistData = sc.textFile(base + "artist_data.txt")
-    val rawArtistAlias = sc.textFile(base + "artist_alias.txt")
+    val base = "file:///home/hungnt/data/profiledata_06-May-2005/"
+    val rawUserArtistData = spark.read.textFile(base + "user_artist_data_small.txt")
+    val rawArtistData = spark.read.textFile(base + "artist_data.txt")
+    val rawArtistAlias = spark.read.textFile(base + "artist_alias.txt")
 
     println("### BEGIN ###")
-    preparation(rawUserArtistData, rawArtistData, rawArtistAlias)
-    model(sc, rawUserArtistData, rawArtistData, rawArtistAlias)
-    evaluate(sc, rawUserArtistData, rawArtistAlias)
-    recommend(sc, rawUserArtistData, rawArtistData, rawArtistAlias)
+    val runRecommender = new RunRecommender(spark)
+    runRecommender.preparation(rawUserArtistData, rawArtistData, rawArtistAlias)
+    runRecommender.model(rawUserArtistData, rawArtistData, rawArtistAlias)
+    runRecommender.evaluate(rawUserArtistData, rawArtistAlias)
+    runRecommender.recommend(rawUserArtistData, rawArtistData, rawArtistAlias)
+  }
+}
+class RunRecommender(private val spark: SparkSession) {
+
+  import spark.implicits._
+
+  def preparation(
+    rawUserArtistData: Dataset[String],
+    rawArtistData: Dataset[String],
+    rawArtistAlias: Dataset[String]): Unit = {
+
+    rawUserArtistData.take(5).foreach(println)
+
+    val userArtistDF = rawUserArtistData.map { line =>
+      val Array(user, artist, _*) = line.split(' ')
+      (user.toInt, artist.toInt)
+    }.toDF("user", "artist")
+
+    userArtistDF.agg(min("user"), max("user"), min("artist"), max("artist")).show()
+
+    val artistByID = buildArtistByID(rawArtistData)
+    val artistAlias = buildArtistAlias(rawArtistAlias)
+
+    val (badID, goodID) = artistAlias.head
+    artistByID.filter($"id" isin (badID, goodID)).show()
   }
 
-  def buildArtistByID(rawArtistData: RDD[String]) =
+  def model(
+    rawUserArtistData: Dataset[String],
+    rawArtistData: Dataset[String],
+    rawArtistAlias: Dataset[String]): Unit = {
+
+    val bArtistAlias = spark.sparkContext.broadcast(buildArtistAlias(rawArtistAlias))
+
+    val trainData = buildCounts(rawUserArtistData, bArtistAlias).cache()
+
+    val model = new ALS().
+      setSeed(Random.nextLong()).
+      setImplicitPrefs(true).
+      setRank(10).
+      setRegParam(0.01).
+      setAlpha(1.0).
+      setMaxIter(5).
+      setUserCol("user").
+      setItemCol("artist").
+      setRatingCol("count").
+      setPredictionCol("prediction").
+      fit(trainData)
+
+    trainData.unpersist()
+
+    model.userFactors.select("features").show(truncate = false)
+
+    val userID = 2093760
+
+    val existingArtistIDs = trainData.
+      filter($"user" === userID).
+      select("artist").as[Int].collect()
+
+    val artistByID = buildArtistByID(rawArtistData)
+
+    artistByID.filter($"id" isin (existingArtistIDs: _*)).show()
+
+    val topRecommendations = makeRecommendations(model, userID, 5)
+    topRecommendations.show()
+
+    val recommendedArtistIDs = topRecommendations.select("artist").as[Int].collect()
+
+    artistByID.filter($"id" isin (recommendedArtistIDs: _*)).show()
+
+    model.userFactors.unpersist()
+    model.itemFactors.unpersist()
+  }
+
+  def evaluate(
+    rawUserArtistData: Dataset[String],
+    rawArtistAlias: Dataset[String]): Unit = {
+
+    val bArtistAlias = spark.sparkContext.broadcast(buildArtistAlias(rawArtistAlias))
+
+    val allData = buildCounts(rawUserArtistData, bArtistAlias)
+    val Array(trainData, cvData) = allData.randomSplit(Array(0.9, 0.1))
+    trainData.cache()
+    cvData.cache()
+
+    val allArtistIDs = allData.select("artist").as[Int].distinct().collect()
+    val bAllArtistIDs = spark.sparkContext.broadcast(allArtistIDs)
+
+    val mostListenedAUC = areaUnderCurve(cvData, bAllArtistIDs, predictMostListened(trainData))
+    println(mostListenedAUC)
+
+    val evaluations =
+      for (
+        rank <- Seq(5, 30);
+        regParam <- Seq(1.0, 0.0001);
+        alpha <- Seq(1.0, 40.0)
+      ) yield {
+        val model = new ALS().
+          setSeed(Random.nextLong()).
+          setImplicitPrefs(true).
+          setRank(rank).setRegParam(regParam).
+          setAlpha(alpha).setMaxIter(20).
+          setUserCol("user").setItemCol("artist").
+          setRatingCol("count").setPredictionCol("prediction").
+          fit(trainData)
+
+        val auc = areaUnderCurve(cvData, bAllArtistIDs, model.transform)
+
+        model.userFactors.unpersist()
+        model.itemFactors.unpersist()
+
+        (auc, (rank, regParam, alpha))
+      }
+
+    evaluations.sorted.reverse.foreach(println)
+
+    trainData.unpersist()
+    cvData.unpersist()
+  }
+
+  def recommend(
+    rawUserArtistData: Dataset[String],
+    rawArtistData: Dataset[String],
+    rawArtistAlias: Dataset[String]): Unit = {
+
+    val bArtistAlias = spark.sparkContext.broadcast(buildArtistAlias(rawArtistAlias))
+    val allData = buildCounts(rawUserArtistData, bArtistAlias).cache()
+    val model = new ALS().
+      setSeed(Random.nextLong()).
+      setImplicitPrefs(true).
+      setRank(10).setRegParam(1.0).setAlpha(40.0).setMaxIter(20).
+      setUserCol("user").setItemCol("artist").
+      setRatingCol("count").setPredictionCol("prediction").
+      fit(allData)
+    allData.unpersist()
+
+    val userID = 2093760
+    val topRecommendations = makeRecommendations(model, userID, 5)
+
+    val recommendedArtistIDs = topRecommendations.select("artist").as[Int].collect()
+    val artistByID = buildArtistByID(rawArtistData)
+    artistByID.join(spark.createDataset(recommendedArtistIDs).toDF("id"), "id").
+      select("name").show()
+
+    model.userFactors.unpersist()
+    model.itemFactors.unpersist()
+  }
+
+  def buildArtistByID(rawArtistData: Dataset[String]): DataFrame = {
     rawArtistData.flatMap { line =>
       val (id, name) = line.span(_ != '\t')
       if (name.isEmpty) {
@@ -41,241 +187,122 @@ object NhacsoRecommender {
         try {
           Some((id.toInt, name.trim))
         } catch {
-          case e: NumberFormatException => None
+          case _: NumberFormatException => None
         }
       }
-    }
-
-  def buildArtistAlias(rawArtistAlias: RDD[String]): Map[Int, Int] =
-    rawArtistAlias.flatMap { line =>
-      val tokens = line.split('\t')
-      if (tokens(0).isEmpty) {
-        None
-      } else {
-        Some((tokens(0).toInt, tokens(1).toInt))
-      }
-    }.collectAsMap()
-
-  def preparation(
-    rawUserArtistData: RDD[String],
-    rawArtistData: RDD[String],
-    rawArtistAlias: RDD[String]) = {
-    println("### BEGIN preparation ###")
-    val userIDStats = rawUserArtistData.map(_.split(' ')(0).toDouble).stats()
-    val itemIDStats = rawUserArtistData.map(_.split(' ')(1).toDouble).stats()
-    println(userIDStats)
-    println(itemIDStats)
-
-    val artistByID = buildArtistByID(rawArtistData)
-    val artistAlias = buildArtistAlias(rawArtistAlias)
-
-    val (badID, goodID) = artistAlias.head
-    println(artistByID.lookup(badID) + " -> " + artistByID.lookup(goodID))
+    }.toDF("id", "name")
   }
 
-  def buildRatings(
-    rawUserArtistData: RDD[String],
-    bArtistAlias: Broadcast[Map[Int, Int]]) = {
-    println("### BEGIN buildRatings ###")
+  def buildArtistAlias(rawArtistAlias: Dataset[String]): Map[Int, Int] = {
+    rawArtistAlias.flatMap { line =>
+      val Array(artist, alias) = line.split('\t')
+      if (artist.isEmpty) {
+        None
+      } else {
+        Some((artist.toInt, alias.toInt))
+      }
+    }.collect().toMap
+  }
+
+  def buildCounts(
+    rawUserArtistData: Dataset[String],
+    bArtistAlias: Broadcast[Map[Int, Int]]): DataFrame = {
     rawUserArtistData.map { line =>
       val Array(userID, artistID, count) = line.split(' ').map(_.toInt)
       val finalArtistID = bArtistAlias.value.getOrElse(artistID, artistID)
-      Rating(userID, finalArtistID, count)
-    }
+      (userID, finalArtistID, count)
+    }.toDF("user", "artist", "count")
   }
 
-  def model(
-    sc: SparkContext,
-    rawUserArtistData: RDD[String],
-    rawArtistData: RDD[String],
-    rawArtistAlias: RDD[String]): Unit = {
-    println("### BEGIN model ###")
-
-    val bArtistAlias = sc.broadcast(buildArtistAlias(rawArtistAlias))
-
-    val trainData = buildRatings(rawUserArtistData, bArtistAlias).cache()
-
-    val model = ALS.trainImplicit(trainData, 10, 5, 0.01, 1.0)
-
-    trainData.unpersist()
-
-    println(model.userFeatures.mapValues(_.mkString(", ")).first())
-
-    val userID = 1036996
-    val recommendations = model.recommendProducts(userID, 5)
-    recommendations.foreach(println)
-    val recommendedProductIDs = recommendations.map(_.product).toSet
-
-    val rawArtistsForUser = rawUserArtistData.map(_.split(' ')).
-      filter { case Array(user, _, _) => user.toInt == userID }
-
-    val existingProducts = rawArtistsForUser.map { case Array(_, artist, _) => artist.toInt }.
-      collect().toSet
-
-    val artistByID = buildArtistByID(rawArtistData)
-
-    artistByID.filter { case (id, name) => existingProducts.contains(id) }.
-      values.collect().foreach(println)
-    artistByID.filter { case (id, name) => recommendedProductIDs.contains(id) }.
-      values.collect().foreach(println)
-
-    unpersist(model)
+  def makeRecommendations(model: ALSModel, userID: Int, howMany: Int): DataFrame = {
+    val toRecommend = model.itemFactors.
+      select($"id".as("artist")).
+      withColumn("user", lit(userID))
+    model.transform(toRecommend).
+      select("artist", "prediction").
+      orderBy($"prediction".desc).
+      limit(howMany)
   }
 
   def areaUnderCurve(
-    positiveData: RDD[Rating],
-    bAllItemIDs: Broadcast[Array[Int]],
-    predictFunction: (RDD[(Int, Int)] => RDD[Rating])) = {
-    println("### BEGIN areaUnderCurve ###")
+    positiveData: DataFrame,
+    bAllArtistIDs: Broadcast[Array[Int]],
+    predictFunction: (DataFrame => DataFrame)): Double = {
+
     // What this actually computes is AUC, per user. The result is actually something
     // that might be called "mean AUC".
 
-    // Take held-out data as the "positive", and map to tuples
-    val positiveUserProducts = positiveData.map(r => (r.user, r.product))
-    // Make predictions for each of them, including a numeric score, and gather by user
-    val positivePredictions = predictFunction(positiveUserProducts).groupBy(_.user)
+    // Take held-out data as the "positive".
+    // Make predictions for each of them, including a numeric score
+    val positivePredictions = predictFunction(positiveData.select("user", "artist")).
+      withColumnRenamed("prediction", "positivePrediction")
 
     // BinaryClassificationMetrics.areaUnderROC is not used here since there are really lots of
     // small AUC problems, and it would be inefficient, when a direct computation is available.
 
     // Create a set of "negative" products for each user. These are randomly chosen
-    // from among all of the other items, excluding those that are "positive" for the user.
-    val negativeUserProducts = positiveUserProducts.groupByKey().mapPartitions {
-      // mapPartitions operates on many (user,positive-items) pairs at once
-      userIDAndPosItemIDs =>
-        {
-          // Init an RNG and the item IDs set once for partition
+    // from among all of the other artists, excluding those that are "positive" for the user.
+    val negativeData = positiveData.select("user", "artist").as[(Int, Int)].
+      groupByKey { case (user, _) => user }.
+      flatMapGroups {
+        case (userID, userIDAndPosArtistIDs) =>
           val random = new Random()
-          val allItemIDs = bAllItemIDs.value
-          userIDAndPosItemIDs.map {
-            case (userID, posItemIDs) =>
-              val posItemIDSet = posItemIDs.toSet
-              val negative = new ArrayBuffer[Int]()
-              var i = 0
-              // Keep about as many negative examples per user as positive.
-              // Duplicates are OK
-              while (i < allItemIDs.size && negative.size < posItemIDSet.size) {
-                val itemID = allItemIDs(random.nextInt(allItemIDs.size))
-                if (!posItemIDSet.contains(itemID)) {
-                  negative += itemID
-                }
-                i += 1
-              }
-              // Result is a collection of (user,negative-item) tuples
-              negative.map(itemID => (userID, itemID))
+          val posItemIDSet = userIDAndPosArtistIDs.map { case (_, artist) => artist }.toSet
+          val negative = new ArrayBuffer[Int]()
+          val allArtistIDs = bAllArtistIDs.value
+          var i = 0
+          // Make at most one pass over all artists to avoid an infinite loop.
+          // Also stop when number of negative equals positive set size
+          while (i < allArtistIDs.length && negative.size < posItemIDSet.size) {
+            val artistID = allArtistIDs(random.nextInt(allArtistIDs.length))
+            // Only add new distinct IDs
+            if (!posItemIDSet.contains(artistID)) {
+              negative += artistID
+            }
+            i += 1
           }
-        }
-    }.flatMap(t => t)
-    // flatMap breaks the collections above down into one big set of tuples
+          // Return the set with user ID added back
+          negative.map(artistID => (userID, artistID))
+      }.toDF("user", "artist")
 
     // Make predictions on the rest:
-    val negativePredictions = predictFunction(negativeUserProducts).groupBy(_.user)
+    val negativePredictions = predictFunction(negativeData).
+      withColumnRenamed("prediction", "negativePrediction")
 
-    // Join positive and negative by user
-    positivePredictions.join(negativePredictions).values.map {
-      case (positiveRatings, negativeRatings) =>
-        // AUC may be viewed as the probability that a random positive item scores
-        // higher than a random negative one. Here the proportion of all positive-negative
-        // pairs that are correctly ranked is computed. The result is equal to the AUC metric.
-        var correct = 0L
-        var total = 0L
-        // For each pairing,
-        for (
-          positive <- positiveRatings;
-          negative <- negativeRatings
-        ) {
-          // Count the correctly-ranked pairs
-          if (positive.rating > negative.rating) {
-            correct += 1
-          }
-          total += 1
-        }
-        // Return AUC: fraction of pairs ranked correctly
-        correct.toDouble / total
-    }.mean() // Return mean AUC over users
+    // Join positive predictions to negative predictions by user, only.
+    // This will result in a row for every possible pairing of positive and negative
+    // predictions within each user.
+    val joinedPredictions = positivePredictions.join(negativePredictions, "user").
+      select("user", "positivePrediction", "negativePrediction").cache()
+
+    // Count the number of pairs per user
+    val allCounts = joinedPredictions.
+      groupBy("user").agg(count(lit("1")).as("total")).
+      select("user", "total")
+    // Count the number of correctly ordered pairs per user
+    val correctCounts = joinedPredictions.
+      filter($"positivePrediction" > $"negativePrediction").
+      groupBy("user").agg(count("user").as("correct")).
+      select("user", "correct")
+
+    // Combine these, compute their ratio, and average over all users
+    val meanAUC = allCounts.join(correctCounts, "user").
+      select($"user", ($"correct" / $"total").as("auc")).
+      agg(mean("auc")).
+      as[Double].first()
+
+    joinedPredictions.unpersist()
+
+    meanAUC
   }
 
-  def predictMostListened(sc: SparkContext, train: RDD[Rating])(allData: RDD[(Int, Int)]) = {
-    println("### BEGIN predictMostListened ###")
-    
-    val bListenCount =
-      sc.broadcast(train.map(r => (r.product, r.rating)).reduceByKey(_ + _).collectAsMap())
-    allData.map {
-      case (user, product) =>
-        Rating(user, product, bListenCount.value.getOrElse(product, 0.0))
-    }
-  }
-
-  def evaluate(
-    sc: SparkContext,
-    rawUserArtistData: RDD[String],
-    rawArtistAlias: RDD[String]): Unit = {
-    println("### BEGIN evaluate ###")
-    val bArtistAlias = sc.broadcast(buildArtistAlias(rawArtistAlias))
-
-    val allData = buildRatings(rawUserArtistData, bArtistAlias)
-    val Array(trainData, cvData) = allData.randomSplit(Array(0.9, 0.1))
-    trainData.cache()
-    cvData.cache()
-
-    val allItemIDs = allData.map(_.product).distinct().collect()
-    val bAllItemIDs = sc.broadcast(allItemIDs)
-
-    val mostListenedAUC = areaUnderCurve(cvData, bAllItemIDs, predictMostListened(sc, trainData))
-    println(mostListenedAUC)
-
-    val evaluations =
-      for (
-        rank <- Array(10, 50);
-        lambda <- Array(1.0, 0.0001);
-        alpha <- Array(1.0, 40.0)
-      ) yield {
-        val model = ALS.trainImplicit(trainData, rank, 10, lambda, alpha)
-        val auc = areaUnderCurve(cvData, bAllItemIDs, model.predict)
-        unpersist(model)
-        ((rank, lambda, alpha), auc)
-      }
-
-    evaluations.sortBy(_._2).reverse.foreach(println)
-
-    trainData.unpersist()
-    cvData.unpersist()
-  }
-
-  def recommend(
-    sc: SparkContext,
-    rawUserArtistData: RDD[String],
-    rawArtistData: RDD[String],
-    rawArtistAlias: RDD[String]): Unit = {
-    println("### BEGIN recommend ###")
-
-    val bArtistAlias = sc.broadcast(buildArtistAlias(rawArtistAlias))
-    val allData = buildRatings(rawUserArtistData, bArtistAlias).cache()
-    val model = ALS.trainImplicit(allData, 50, 10, 1.0, 40.0)
-    allData.unpersist()
-
-    val userID = 2093760
-    val recommendations = model.recommendProducts(userID, 5)
-    val recommendedProductIDs = recommendations.map(_.product).toSet
-
-    val artistByID = buildArtistByID(rawArtistData)
-
-    artistByID.filter { case (id, name) => recommendedProductIDs.contains(id) }.
-      values.collect().foreach(println)
-
-    val someUsers = allData.map(_.user).distinct().take(100)
-    val someRecommendations = someUsers.map(userID => model.recommendProducts(userID, 5))
-    someRecommendations.map(
-      recs => recs.head.user + " -> " + recs.map(_.product).mkString(", ")).foreach(println)
-
-    unpersist(model)
-  }
-
-  def unpersist(model: MatrixFactorizationModel): Unit = {
-    // At the moment, it's necessary to manually unpersist the RDDs inside the model
-    // when done with it in order to make sure they are promptly uncached
-    model.userFeatures.unpersist()
-    model.productFeatures.unpersist()
+  def predictMostListened(train: DataFrame)(allData: DataFrame): DataFrame = {
+    val listenCounts = train.groupBy("artist").
+      agg(sum("count").as("prediction")).
+      select("artist", "prediction")
+    allData.
+      join(listenCounts, Seq("artist"), "left_outer").
+      select("user", "artist", "prediction")
   }
 
 }
