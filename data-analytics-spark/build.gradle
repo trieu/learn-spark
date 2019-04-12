@@ -13,24 +13,26 @@ repositories {
 
 dependencies {
 	// asynchronous programming facility
-	compile group: 'org.scala-lang.modules', name: 'scala-async_2.11', version: '0.9.6'
+	compile group: 'org.scala-lang.modules', name: 'scala-async_2.12', version: '0.10.0'
 
 	// Akka Actor Core
-	compile group: 'com.typesafe.akka', name: 'akka-actor_2.11', version: '2.5.1'
+	compile group: 'com.typesafe.akka', name: 'akka-actor_2.12', version: '2.5.22'
 	
 	// Akka HTTP
-	compile group: 'com.typesafe.akka', name: 'akka-http-core_2.11', version: '10.0.6'
-	compile group: 'com.typesafe.akka', name: 'akka-http_2.11', version: '10.0.6'
-	compile group: 'com.typesafe.akka', name: 'akka-http-spray-json_2.11', version: '10.0.6'
-	
+	compile group: 'com.typesafe.akka', name: 'akka-http-core_2.12', version: '10.1.8'
+	compile group: 'com.typesafe.akka', name: 'akka-http_2.12', version: '10.1.8'	
+	compile group: 'com.typesafe.akka', name: 'akka-http-spray-json_2.12', version: '10.1.8'
+	compile group: 'com.typesafe.akka', name: 'akka-stream_2.12', version: '2.5.22'
 	
 	// Apache Spark
     compile (	
-    		'org.apache.spark:spark-core_2.11:2.1.1'
-			,'org.apache.spark:spark-sql_2.11:2.1.1'
-			,'org.apache.spark:spark-mllib_2.11:2.1.1'
-			,'org.apache.spark:spark-graphx_2.11:2.1.1'		
+    		'org.apache.spark:spark-core_2.12:2.4.1'
+			,'org.apache.spark:spark-sql_2.12:2.4.1'
+			,'org.apache.spark:spark-mllib_2.12:2.4.1'
+			,'org.apache.spark:spark-graphx_2.12:2.4.1'		
 		)
+		
+	// Unit Test 	
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }
 

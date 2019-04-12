@@ -16,14 +16,15 @@ object WebServer {
     implicit val executionContext = system.dispatcher
  
     val route = {
-      path("hello") {
-        get {
-          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Say hello to akka-http</h1>"))
-        }
-      }
+      
       path("about") {
         get {
           complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Akka HTTP Server</h1>"))
+        }
+      }
+      path("demo") {
+        get {
+          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Say hello to akka-http</h1>"))
         }
       }
     }

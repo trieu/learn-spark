@@ -7,7 +7,6 @@ import org.apache.spark.SparkConf
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable.HashSet
 import scala.concurrent.Future
-import scala.concurrent.impl.Future
 import scala.util.control.Breaks._
 import java.io.File
 
